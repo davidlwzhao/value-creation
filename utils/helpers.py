@@ -1,14 +1,17 @@
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
+import numpy as np
+import seaborn as sns
 import math
 
-def percent_stacked_plot_overall(target):
+def percent_stacked_plot_overall(df, target_name):
     # create a figure
     fig = plt.figure(figsize=(10, 6))
     ax = fig.add_subplot(111)
 
     # proportion of observation of each class
-    prop_response = target.value_counts(normalize=True)
+    prop_response = df[target_name].value_counts(normalize=True)
 
     # create a bar plot showing the percentage of churn
     prop_response.plot(kind='bar',
@@ -29,51 +32,6 @@ def percent_stacked_plot_overall(target):
     for spine_name in spine_names:
         ax.spines[spine_name].set_visible(False)
 
-
-def percentage_stacked_plot(df, target_name, columns_to_plot, super_title):
-    '''
-    Prints a 100% stacked plot of the response variable for independent variable of the list columns_to_plot.
-            Parameters:
-                    columns_to_plot (list of string): Names of the variables to plot
-                    super_title (string): Super title of the visualization
-            Returns:
-                    None
-    '''
-
-    number_of_columns = 2
-    number_of_rows = math.ceil(len(columns_to_plot) / 2)
-
-    # create a figure
-    fig = plt.figure(figsize=(12, 5 * number_of_rows))
-    fig.suptitle(super_title, fontsize=22, y=.95)
-
-    # loop to each column name to create a subplot
-    for index, column in enumerate(columns_to_plot, 1):
-
-        # create the subplot
-        ax = fig.add_subplot(number_of_rows, number_of_columns, index)
-
-        # calculate the percentage of observations of the response variable for each group of the independent variable
-        # 100% stacked bar plot
-        prop_by_independent = pd.crosstab(df[column], df[target_name]).apply(lambda x: x / x.sum() * 100, axis=1)
-
-        prop_by_independent.plot(kind='bar', ax=ax, stacked=True,
-                                 rot=0, color=['springgreen', 'salmon'])
-
-        # set the legend in the upper right corner
-        ax.legend(loc="upper right", bbox_to_anchor=(0.62, 0.5, 0.5, 0.5),
-                  title='Churn', fancybox=True)
-
-        # set title and labels
-        ax.set_title('Proportion of observations by ' + column,
-                     fontsize=16, loc='left')
-
-        ax.tick_params(rotation='auto')
-
-        # eliminate the frame from the plot
-        spine_names = ('top', 'right', 'bottom', 'left')
-        for spine_name in spine_names:
-            ax.spines[spine_name].set_visible(False)
 
 
 def histogram_plots(df, target_name, columns_to_plot, super_title, responses=('No', 'Yes')):
@@ -134,3 +92,148 @@ def mutual_information_plot(df, target_name):
 
     # visualize feature importance
     feature_importance.plot(kind='barh', title='Feature Importance')
+
+
+def corr_matrix(df):
+    corr = df.corr('pearson')
+    mask = np.zeros_like(corr, dtype=bool)
+    mask[np.triu_indices_from(mask)] = True
+    corr[mask] = np.nan
+    return (corr
+     .style
+     .background_gradient(cmap='coolwarm', axis=None, vmin=-1, vmax=1)
+     #.highlight_null()  # Color NaNs grey
+     .format(precision=2))
+
+
+def pairplot(df, target_name, sample=0.01):
+    Num_feats = df.select_dtypes(include=[np.number]).copy()
+
+    sample_for_pair_plot = Num_feats.groupby(target_name, group_keys=False).apply(
+        lambda x: x.sample(frac=sample)
+    )
+
+    sns.pairplot(
+        sample_for_pair_plot,
+        hue=target_name,
+        kind="scatter",
+        diag_kind="kde",
+        palette=sns.color_palette(["#e42256", "#00b1b0"]),
+        height=1.5,
+        aspect=1,
+        plot_kws=dict(s=10),
+    )
+    plt.show()
+
+
+def counts_plot(df, y_var, col="w", ax=None):
+    y_var_counts = (
+        df.loc[:, y_var]
+        .value_counts()
+        .reset_index()
+        .rename(columns={"index": y_var, y_var: "counts"})
+        .assign(
+            percent=lambda df_: (df_["counts"] / df_["counts"].sum()).round(2) * 100
+        )
+    )
+    sns.set_context("paper")
+    ax0 = sns.barplot(
+        data=y_var_counts,
+        x="percent",
+        y=y_var,
+        color=col,
+        ax=ax,
+        order=y_var_counts[y_var],
+    )
+    values1 = ax0.containers[0].datavalues
+    labels = ["{:g}%".format(val) for val in values1]
+    ax0.bar_label(ax0.containers[0], labels=labels, fontsize=9, color="#740405")
+    ax0.set_ylabel("")
+    ax0.set_xlabel("Percent", fontsize=10)
+    ax0.set_title(str.title(y_var) + " | proportions ", fontsize=10)
+    return
+
+def num_distributions(df, target_name, var_1, var_2):
+    age_dur = df[[var_1, var_2, target_name]]
+    target_color = sns.color_palette(["#e42256", "#00b1b0"])
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(11, 4))
+
+    ## HistPlot1
+
+    sns.histplot(
+        stat='percent',
+        data=age_dur,
+        kde=True,
+        line_kws={"lw": 1.5, "alpha": 0.6},
+        common_norm=False,
+        x=var_1,
+        bins=20,
+        hue=target_name,
+        palette=target_color,
+        alpha=0.6,
+        ax=ax1,
+    )
+    ax1.legend(
+        title="Subscribed?",
+        loc="upper right",
+        labels=["YES", "NO"],
+        ncol=2,
+        frameon=True,
+        shadow=True,
+        title_fontsize=8,
+        prop={"size": 7},
+        bbox_to_anchor=(1.18, 1.25),
+    )
+    ax1.set_xlabel(str.title(var_1), fontsize=10)
+    ax1.set_ylabel("Frequency", fontsize=10)
+    ax1.set_title(str.title(var_1) + " distributions", fontsize=12)
+    ax1.yaxis.set_major_formatter(ticker.EngFormatter())
+
+    ## Scatter plot
+
+    sns.scatterplot(
+        data=age_dur,
+        x=var_1,
+        y=var_2,
+        hue=target_name,
+        ax=ax2,
+        palette=target_color,
+        legend=False,
+        alpha=0.6,
+    )
+    ax2.yaxis.set_major_formatter(ticker.EngFormatter())
+    ax2.set_title(str.title(var_2) + " distributions", fontsize=12)
+    ax2.set_ylabel(str.title(var_2), fontsize=10)
+    ax2.set_xlabel(str.title(var_1), fontsize=10)
+
+    ## HistPlot3
+
+    sns.histplot(
+        stat='percent',
+        data=age_dur,
+        kde=True,
+        line_kws={"lw": 1.5, "alpha": 0.6},
+        common_norm=False,
+        x=var_2,
+        bins=20,
+        hue=target_name,
+        palette=target_color,
+        alpha=0.6,
+        ax=ax3,
+    )
+    ax3.legend(
+        title="Subscribed?",
+        loc="upper right",
+        labels=["YES", "NO"],
+        ncol=2,
+        frameon=True,
+        shadow=True,
+        title_fontsize=8,
+        prop={"size": 7},
+        bbox_to_anchor=(1.18, 1.25),
+    )
+    ax3.set_xlabel(str.title(var_2), fontsize=10)
+    ax3.set_ylabel("Frequency", fontsize=10)
+    ax3.set_title(str.title(var_2) + " distributions", fontsize=12)
+    ax3.yaxis.set_major_formatter(ticker.EngFormatter())
+    return
