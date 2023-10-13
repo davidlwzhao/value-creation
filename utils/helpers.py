@@ -7,18 +7,19 @@ import math
 
 
 class EDAHelper:
-    def __init__(self, df, target_name, no_is_good=False):
+    def __init__(self, df, target_name):
         """
         Assumes that target_name col will already be 1/0 transformed - 1 always taken as 'treatment'
+        Add cat count deltas
+        ADD OTHER BARH- need exception if row doesn't exist in order??
+
         """
         self.data = df
         self.target_name = target_name
         self.numerical_cols = df.select_dtypes(np.number).columns.tolist()
         self.cat_cols = df.select_dtypes(exclude=np.number).columns.tolist()
-        if no_is_good:
-            self.color = sns.color_palette(["#e42256", "#00b1b0"])
-        else:
-            self.color = sns.color_palette(["#e42256", "#00b1b0"])
+        self.color = sns.color_palette(["#00b1b0", "#e42256"])
+
 
     def init_diagnostic(self, exclude=None):
         numerical_cols = self.numerical_cols
@@ -34,14 +35,37 @@ class EDAHelper:
         # loop through categorical dimensions
         for col in cat_cols:
             # instantiate subplot
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 6))
+            fig, (ax1, ax2, ax3, ax4) = plt.subplots(1, 4, figsize=(16, 6))
             fig.suptitle(f"{col.capitalize()} Counts & Cut with {self.target_name}", fontsize=12, y=.95)
 
             # counts
-            self.counts_plot(col, ax=ax1, col="#35a79c") # NEED TO FIGURE OUT HOW TO MAKE THIS SHARED AXIS
+            order = self.counts_plot(col,
+                                     ax=ax1,
+                                     title=str.title(col) + " | Overall Proportions ",
+                                     col="#2e5090")
+            target_val = self.data[self.target_name].unique()
+
+            # counts
+            _ = self.counts_plot(col,
+                                 order=order,
+                                 hide_label=True,
+                                 target_filter=target_val[1],
+                                 ax=ax2,
+                                 title=f"{self.target_name}={target_val[1]}",
+                                 col=self.color[1])
+
+            # counts
+            _ = self.counts_plot(col,
+                                 order=order,
+                                 hide_label=True,
+                                 delta=True,
+                                 ax=ax3,
+                                 title=f"{self.target_name}={target_val[1]} - {self.target_name}={target_val[0]}",
+                                 col="#e42256")
 
             # 100% stacked
-            self.percentage_stacked_plot(col, ax=ax2)
+            self.percentage_stacked_plot(col, order, ax=ax4)
+            break
 
         # loop through dimensions
         for col in numerical_cols:
@@ -49,7 +73,7 @@ class EDAHelper:
                 continue
 
             # instantiate subplot
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 6))
+            fig, (ax1, ax2, ax3, ax4) = plt.subplots(1, 4, figsize=(16, 6))
             fig.suptitle(f"{col.capitalize()} Distribution", fontsize=12, y=.95)
 
             # distribution
@@ -58,7 +82,12 @@ class EDAHelper:
             # distribution (not-normalized)
             self. numerical_dist(col, normalize=False, ax=ax2)
 
+            # distribution (log transform)
+            self.numerical_dist(col, log=True, normalize=False, ax=ax3)
+
             # box and whisker
+            self.box_whisker(col, ax=ax4)
+            break
 
         # correlations and multi-feature explorations
         self.pairplot()
@@ -77,7 +106,7 @@ class EDAHelper:
         # create a bar plot showing the percentage of churn
         prop_response.plot(kind='bar',
                            ax=ax,
-                           color=['springgreen', 'salmon'])
+                           color=self.color)
 
         # set title and labels
         ax.set_title('Proportion of observations of the response variable',
@@ -93,12 +122,12 @@ class EDAHelper:
         for spine_name in spine_names:
             ax.spines[spine_name].set_visible(False)
 
-    def percentage_stacked_plot(self, column, ax=None):
+    def percentage_stacked_plot(self, column, order, ax=None):
         # calculate the percentage of observations of the response variable for each group of the independent variable
         # 100% stacked bar plot
         prop_by_independent = pd.crosstab(self.data[column], self.data[self.target_name]).apply(lambda x: x / x.sum() * 100, axis=1)
 
-        prop_by_independent.plot(kind='barh', ax=ax, stacked=True,
+        prop_by_independent.loc[order.tolist()[::-1], :].plot(kind='barh', ax=ax, stacked=True,
                                  rot=0, color=self.color)
 
         # set the legend in the upper right corner
@@ -109,15 +138,22 @@ class EDAHelper:
         ax.set_title('Proportion of observations by ' + column,
                      fontsize=10, loc='left')
 
-        ax.tick_params(rotation='auto')
+        # ax.tick_params(rotation='auto')
+        ax.set(yticklabels=[])
+        ax.set(ylabel=None)  # remove the y-axis label
+        ax.tick_params(left=False)  # remove the ticks
 
         # eliminate the frame from the plot
         spine_names = ('top', 'right', 'bottom', 'left')
         for spine_name in spine_names:
             ax.spines[spine_name].set_visible(False)
 
-    def numerical_dist(self, col, ax=None, normalize=True):
-        selected = self.data[[col, self.target_name]]
+    def numerical_dist(self, col, ax=None, log=False, normalize=True):
+        selected = (self.data
+        .loc[:, [col, self.target_name]]
+        .assign(
+            feature=(lambda x: np.log(x[col]) if log else x[col])
+        ))
 
         ## HistPlot1
         sns.histplot(
@@ -126,28 +162,30 @@ class EDAHelper:
             kde=True,
             line_kws={"lw": 1.5, "alpha": 0.6},
             common_norm=not normalize,
-            x=col,
+            x='feature',
             bins=20,
             hue=self.target_name,
             palette=self.color,
             alpha=0.6,
             ax=ax,
         )
-        ax.legend(
-            title=self.target_name,
-            loc="upper right",
-            labels=self.data[self.target_name].unique().tolist(),
-            ncol=2,
-            frameon=True,
-            shadow=True,
-            title_fontsize=8,
-            prop={"size": 7},
-            bbox_to_anchor=(1.18, 1.25),
-        )
         ax.set_xlabel(str.title(col), fontsize=10)
         ax.set_ylabel("Frequency", fontsize=10)
         ax.set_title(str.title(col) + " distributions", fontsize=12)
         ax.yaxis.set_major_formatter(ticker.EngFormatter())
+
+    def box_whisker(self, col, ax=None):
+        selected = self.data[[col, self.target_name]]
+
+        sns.boxplot(
+            x=self.target_name,
+            y=col,
+            #hue='kind',
+            data=selected,
+            palette=self.color,
+            ax=ax)
+
+        ax.set_title(str.title(col) + " distributions", fontsize=12)
 
     # function that computes the mutual infomation score between a categorical serie and the column Churn
     def mutual_information_plot(self):
@@ -194,9 +232,14 @@ class EDAHelper:
         )
         plt.show()
 
-    def counts_plot(self, y_var, col="w", ax=None):
+    def counts_plot(self, y_var, order=None, title=None, delta=False, hide_label=False, target_filter=None, col="w", ax=None):
+        if target_filter is not None:
+            row_mask = self.data[self.target_name] == target_filter
+        else:
+            row_mask = np.repeat(True, self.data.shape[0])
+
         y_var_counts = (
-            self.data.loc[:, y_var]
+            self.data.loc[row_mask, y_var]
             .value_counts()
             .reset_index()
             .rename(columns={"index": y_var, y_var: "counts"})
@@ -204,22 +247,46 @@ class EDAHelper:
                 percent=lambda df_: (df_["counts"] / df_["counts"].sum()).round(2) * 100
             )
         )
+
+        if order is None:
+            order = y_var_counts[y_var]
+
+        if delta:
+            y_var_counts = (
+                pd.crosstab(self.data[y_var], self.data[self.target_name])
+                .apply(lambda x: x/x.sum() *100, axis=0)
+                .assign(
+                    percent=lambda df_: (df_[1] - df_[0]).round(2),
+                    col=lambda df_: np.where(df_['percent'] <= 0, '#0f0f0f', '#0f0f0f')
+                )
+                .reset_index()
+            )
+            col = {
+                y_var_counts.loc[i, y_var]: y_var_counts.loc[i, 'col'] for i in range(0, y_var_counts.shape[0])
+            }
+            print(col)
+
         sns.set_context("paper")
         ax0 = sns.barplot(
             data=y_var_counts,
             x="percent",
             y=y_var,
-            color=col,
+            #color=col,
             ax=ax,
-            order=y_var_counts[y_var],
+            order=order,
         )
-        values1 = ax0.containers[0].datavalues
+        values1 = y_var_counts.set_index(y_var).loc[order, "percent"].values
         labels = ["{:g}%".format(val) for val in values1]
         ax0.bar_label(ax0.containers[0], labels=labels, fontsize=9, color="#740405")
-        ax0.set_ylabel("")
+
+        if hide_label:
+            ax0.set(yticklabels=[])
+            ax0.set(ylabel=None)  # remove the y-axis label
+            ax0.tick_params(left=False)  # remove the ticks
+
         ax0.set_xlabel("Percent", fontsize=10)
-        ax0.set_title(str.title(y_var) + " | proportions ", fontsize=10)
-        return
+        ax0.set(title=title)
+        return y_var_counts[y_var]
 
 
 def num_distributions(df, target_name, var_1, var_2):
