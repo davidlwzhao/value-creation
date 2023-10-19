@@ -4,6 +4,8 @@ import matplotlib.ticker as ticker
 import numpy as np
 import seaborn as sns
 import math
+from sklearn.ensemble import IsolationForest
+
 
 
 class EDAHelper:
@@ -291,6 +293,94 @@ class EDAHelper:
         ax0.set_xlabel("Percent", fontsize=10)
         ax0.set(title=title)
         return y_var_counts[y_var]
+
+
+class OutlierHelper:
+    def __init__(self, df, strategy):
+        self.data = df.copy()
+        self.strategy = strategy
+
+        self.OUTLIER_OVER = 'over'
+        self.OUTLIER_UNDER = 'under'
+        self.OUTLIER_NOT = 'included'
+        self.outlier_labels = [self.OUTLIER_UNDER, self.OUTLIER_NOT , self.OUTLIER_OVER]
+
+        self.score_implementations = ['percentile', 'iqr', 'zscore']
+
+    def flag_outliers(self):
+        df_num_only = self.data.select_dtypes(np.number)
+        iso = IsolationForest(contamination=0.1)
+        outliers = iso.fit_predict(df_num_only)
+        return outliers
+
+    def score_outlier(self, series, kind='percentile', threshold=(2, 98)):
+        '''
+        Returns bool mask indicating where outliers are
+        '''
+
+        if kind not in self.score_implementations:
+            return series == series
+
+        if kind == self.score_implementations[0]:
+            lower_limit, upper_limit = np.percentile(a=series, q=threshold)
+
+        elif kind == self.score_implementations[1]:
+            Q1, Q3 = np.percentile(a=series, q=[25, 75])
+            IQR = Q3 - Q1
+            upper_limit = Q3 + (1.5 * IQR)
+            lower_limit = Q1 - (1.5 * IQR)
+
+        elif kind == self.score_implementations[2]:
+            mean = np.mean(series)
+            std = np.std(series)
+
+            upper_limit = mean + std * 3
+            lower_limit = mean - std * 3
+
+        return pd.cut(series,
+                      [-np.inf, lower_limit, upper_limit, np.inf],
+                      labels=self.outlier_labels,
+                      retbins=True)
+
+    def cap_outlier(self, series, kind='percentile', threshold=(2, 98)):
+        index, bins = self.score_outlier(series, kind, threshold)
+        _, lower_value, upper_value, _ = bins
+
+        treated = np.where(index == self.OUTLIER_OVER, upper_value, series)
+        treated = np.where(index == self.OUTLIER_UNDER, lower_value, treated)
+
+        return treated
+
+    def treat_outliers(self):
+        '''
+        Strategy is a series of actions to do ie
+
+        Multi-column - isolation forest train/ flag
+        Then single column additional treatment
+        '''
+        self.data['outlier'] = False
+        counter = 0
+
+        if self.strategy['iso']:
+            # flagbased on iso forest
+            self.data['iso_filter'] = np.where(self.flag_outliers() == -1, True, False)
+            self.data['outlier'] = self.data['iso_filter']
+            counter += self.data.outlier.sum()
+            print(f"{counter} outliers identified by isolation forest")
+
+        for col, strat, params in self.strategy['cols']:
+            if strat == 'cap':
+                self.data[f"{col}_capped"] = self.cap_outlier(self.data[col], **params)
+
+            if strat == 'filter':
+                self.data[f'{col}_filter'] = np.where(self.score_outlier(self.data[col], **params)[0] == self.OUTLIER_NOT, False, True)
+                self.data['outlier'] = self.data['outlier'] | self.data[f'{col}_filter']
+                new_count = self.data.outlier.sum() - counter
+                print(f"{new_count} outliers identified in col={col} based on {params}")
+                counter += new_count
+
+        print(f"{counter} outliers in total identified")
+        return self.data
 
 
 def num_distributions(df, target_name, var_1, var_2):
