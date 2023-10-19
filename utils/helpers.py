@@ -60,12 +60,10 @@ class EDAHelper:
                                  hide_label=True,
                                  delta=True,
                                  ax=ax3,
-                                 title=f"{self.target_name}={target_val[1]} - {self.target_name}={target_val[0]}",
-                                 col="#e42256")
+                                 title=f"{self.target_name}={target_val[1]} - {self.target_name}={target_val[0]}")
 
             # 100% stacked
             self.percentage_stacked_plot(col, order, ax=ax4)
-            break
 
         # loop through dimensions
         for col in numerical_cols:
@@ -77,17 +75,16 @@ class EDAHelper:
             fig.suptitle(f"{col.capitalize()} Distribution", fontsize=12, y=.95)
 
             # distribution
-            self.numerical_dist(col, ax=ax1)
+            self.numerical_dist(col, title=f"{col.capitalize()} Normalized", ax=ax1)
 
             # distribution (not-normalized)
-            self. numerical_dist(col, normalize=False, ax=ax2)
+            self. numerical_dist(col, title=f"{col.capitalize()} Not Normalized", normalize=False, ax=ax2)
 
             # distribution (log transform)
-            self.numerical_dist(col, log=True, normalize=False, ax=ax3)
+            self.numerical_dist(col, title=f"{col.capitalize()} Log Transformed", log=True, normalize=False, ax=ax3)
 
             # box and whisker
             self.box_whisker(col, ax=ax4)
-            break
 
         # correlations and multi-feature explorations
         self.pairplot()
@@ -148,7 +145,7 @@ class EDAHelper:
         for spine_name in spine_names:
             ax.spines[spine_name].set_visible(False)
 
-    def numerical_dist(self, col, ax=None, log=False, normalize=True):
+    def numerical_dist(self, col, ax=None, log=False, title=None, normalize=True):
         selected = (self.data
         .loc[:, [col, self.target_name]]
         .assign(
@@ -171,7 +168,7 @@ class EDAHelper:
         )
         ax.set_xlabel(str.title(col), fontsize=10)
         ax.set_ylabel("Frequency", fontsize=10)
-        ax.set_title(str.title(col) + " distributions", fontsize=12)
+        ax.set_title(title, fontsize=12)
         ax.yaxis.set_major_formatter(ticker.EngFormatter())
 
     def box_whisker(self, col, ax=None):
@@ -257,24 +254,31 @@ class EDAHelper:
                 .apply(lambda x: x/x.sum() *100, axis=0)
                 .assign(
                     percent=lambda df_: (df_[1] - df_[0]).round(2),
-                    col=lambda df_: np.where(df_['percent'] <= 0, '#0f0f0f', '#0f0f0f')
+                    col=lambda df_: np.where(df_['percent'] <= 0, 'r', 'g')
                 )
                 .reset_index()
             )
-            col = {
-                y_var_counts.loc[i, y_var]: y_var_counts.loc[i, 'col'] for i in range(0, y_var_counts.shape[0])
-            }
-            print(col)
+            col = y_var_counts.set_index(y_var).loc[order,'col'].values.tolist()
+            sns.set_context("paper")
+            ax0 = sns.barplot(
+                data=y_var_counts,
+                x="percent",
+                y=y_var,
+                palette=col,
+                ax=ax,
+                order=order,
+            )
+        else:
+            sns.set_context("paper")
+            ax0 = sns.barplot(
+                data=y_var_counts,
+                x="percent",
+                y=y_var,
+                color=col,
+                ax=ax,
+                order=order,
+            )
 
-        sns.set_context("paper")
-        ax0 = sns.barplot(
-            data=y_var_counts,
-            x="percent",
-            y=y_var,
-            #color=col,
-            ax=ax,
-            order=order,
-        )
         values1 = y_var_counts.set_index(y_var).loc[order, "percent"].values
         labels = ["{:g}%".format(val) for val in values1]
         ax0.bar_label(ax0.containers[0], labels=labels, fontsize=9, color="#740405")
