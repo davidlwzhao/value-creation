@@ -5,7 +5,258 @@ import numpy as np
 import seaborn as sns
 import math
 from sklearn.ensemble import IsolationForest
+from sklearn.metrics import roc_auc_score, mutual_info_score, precision_recall_curve, confusion_matrix, classification_report
+from sklearn.inspection import permutation_importance
 
+from yellowbrick.classifier import ROCAUC, ClassificationReport, ClassPredictionError, PrecisionRecallCurve
+from yellowbrick.model_selection import FeatureImportances
+
+class ModelEvaluator:
+    def __init__(self, clf, classes, X_train, X_test, y_train, y_test, model_name, voting=False):
+        self.clf = clf
+        self.X_train = X_train
+        self.X_test = X_test
+        self.y_train = y_train
+        self.y_test = y_test
+
+        self.y_train_pred = clf.predict(X_train)
+        self.y_test_pred = clf.predict(X_test)
+        self.y_scores = clf.predict_proba(X_test)[:, 1]
+
+        self.classes = classes
+        self.results = clf.cv_results_
+        self.model_step_name = model_name
+        self.voting = voting
+
+        #self.transformed_data = ppl[:-1].fit_transform(X_train, y_train)
+        self.transformed_feats = clf.best_estimator_[:-1].get_feature_names_out()
+
+    def init_eval(self):
+        print("Best parameter (CV score=%0.3f):" % self.clf.best_score_)
+        print(self.clf.best_params_)
+
+        # confusion matrix
+        self.plot_classification_report(support=True)
+        #self.plot_confusion_matrix()
+
+        # feature importance
+        self.check_feature_importance()
+
+        # ROC AUC
+        self.plot_roc_auc()
+
+        # look at precision vs. recall
+        p, r, thresholds = precision_recall_curve(self.y_test, self.y_scores)
+        self.plot_precision_recall_threshold(p, r, thresholds, 0.30)
+        #self.plot_precision_recall()
+
+    def plot_confusion_matrix(self):
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+
+        sns.heatmap(
+            confusion_matrix(self.y_train, self.y_train_pred),
+            annot=True,
+            fmt="g",
+            cbar=False,
+            cmap="Greens",
+            annot_kws={"size": 15},
+            ax=ax1
+        )
+        ax1.set_title("Confusion matrix (Train set)", fontsize=16)
+        ax1.tick_params(rotation=0)
+        ax1.set_xlabel("Predicted")
+        ax1.set_ylabel("Actual")
+
+        sns.heatmap(
+            confusion_matrix(self.y_test, self.y_test_pred),
+            annot=True,
+            fmt="g",
+            cbar=False,
+            cmap="Reds",
+            annot_kws={"size": 15},
+            ax=ax2
+        )
+        ax2.set_title("Confusion matrix (Test set)", fontsize=16)
+        ax2.tick_params(rotation=0)
+        ax2.set_xlabel("Predicted")
+        ax2.set_ylabel("Actual")
+
+        print("Train", classification_report(self.y_train, self.y_train_pred))
+        print("Test", classification_report(self.y_test, self.y_test_pred))
+
+    def plot_classification_report(self, support=True):
+        cr = ClassificationReport(self.clf, classes=self.classes, support=support)
+        cr.fit(self.X_train, self.y_train)
+        cr.score(self.X_test, self.y_test)
+        cr.show()
+
+    def plot_roc_auc(self):
+        cr = ROCAUC(self.clf, classes=self.classes)
+        cr.fit(self.X_train, self.y_train)
+        cr.score(self.X_test, self.y_test)
+        cr.show()
+
+    def plot_precision_recall(self):
+        cr = PrecisionRecallCurve(self.clf)
+        cr.fit(self.X_train, self.y_train)
+        cr.score(self.X_test, self.y_test)
+        cr.show()
+
+    @staticmethod
+    def adjusted_classes(y_scores, t):
+        """
+        This function adjusts class predictions based on the prediction threshold (t).
+        Will only work for binary classification problems.
+        """
+        return [1 if y >= t else 0 for y in y_scores]
+
+    def plot_precision_recall_threshold(self, p, r, thresholds, t=0.5):
+        """
+        plots the precision recall curve and shows the current value for each
+        by identifying the classifier's threshold (t).
+        """
+
+        # generate new class predictions based on the adjusted_classes
+        # function above and view the resulting confusion matrix.
+        y_pred_adj = self.adjusted_classes(self.y_scores, t)
+        print(pd.DataFrame(confusion_matrix(self.y_test, y_pred_adj),
+                           columns=['pred_neg', 'pred_pos'],
+                           index=['neg', 'pos']))
+
+        # plot the curve
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+        fig.suptitle("Precision and Recall curve; ^ = current threshold", fontsize=14)
+
+        # plot precision vs. recall
+        ax1.step(r, p, color='b', alpha=0.2,
+                 where='post')
+        ax1.fill_between(r, p, step='post', alpha=0.2,
+                         color='b')
+        ax1.set_xlabel('Recall')
+        ax1.set_ylabel('Precision')
+
+        # plot the current threshold on the line
+        for t_plot, color in zip([t, 0.5], ['c', 'k']):
+            close_default_clf = np.argmin(np.abs(thresholds - t_plot))
+            ax1.plot(r[close_default_clf], p[close_default_clf], '^', c=color,
+                     markersize=15)
+            ax1.annotate(f"t={t_plot}", (r[close_default_clf], p[close_default_clf]))
+            ax2.axvline(x=t_plot, color=color)
+
+        # plot both as a function of threshold
+        ax2.plot(thresholds, p[:-1], "b--", label="Precision")
+        ax2.plot(thresholds, r[:-1], "g-", label="Recall")
+        ax2.set_ylabel("Score")
+        ax2.set_xlabel("Decision Threshold")
+        ax2.legend(loc='best')
+
+        plt.show()
+
+    def plot_param_tuning_scores(results, param_name, scoring):
+        plt.figure(figsize=(13, 13))
+        plt.title("GridSearchCV evaluating using multiple scorers simultaneously", fontsize=16)
+
+        plt.xlabel(param_name)
+        plt.ylabel("Score")
+
+        ax = plt.gca()
+        # ax.set_xlim(0, 402)
+        # ax.set_ylim(0.00, 1)
+
+        # Get the regular numpy array from the MaskedArray
+        X_axis = np.array(results[f"param_{param_name}"].data, dtype=float)
+
+        for scorer, color in zip(sorted(scoring), ["g", "k", "r", "b", "m", "c", "y"]):
+            for sample, style in (("train", "--"), ("test", "-")):
+                sample_score_mean = results["mean_%s_%s" % (sample, scorer)]
+                sample_score_std = results["std_%s_%s" % (sample, scorer)]
+                ax.fill_between(
+                    X_axis,
+                    sample_score_mean - sample_score_std,
+                    sample_score_mean + sample_score_std,
+                    alpha=0.1 if sample == "test" else 0,
+                    color=color,
+                )
+                ax.plot(
+                    X_axis,
+                    sample_score_mean,
+                    style,
+                    color=color,
+                    alpha=1 if sample == "test" else 0.7,
+                    label="%s (%s)" % (scorer, sample),
+                )
+
+            best_index = np.nonzero(results["rank_test_%s" % scorer] == 1)[0][0]
+            best_score = results["mean_test_%s" % scorer][best_index]
+
+            # Plot a dotted vertical line at the best score for that scorer marked by x
+            ax.plot(
+                [
+                    X_axis[best_index],
+                ]
+                * 2,
+                [0, best_score],
+                linestyle="-.",
+                color=color,
+                marker="x",
+                markeredgewidth=3,
+                ms=8,
+            )
+
+            # Annotate the best score for that scorer
+            ax.annotate("%0.2f" % best_score, (X_axis[best_index], best_score + 0.005))
+
+        plt.legend(loc="best")
+        plt.grid(False)
+        plt.show()
+
+    def _get_importances(self):
+        model = self.clf.best_estimator_.named_steps[self.model_step_name]
+        # check if type of voting classifier
+        if not self.voting:
+            return model.feature_importances_
+
+        imps = dict()
+        # is voting classifier
+        for est in model.estimators_:
+            if hasattr(est, 'feature_importances_'):
+                imps[str(est)] = est.feature_importances_
+            elif hasattr(est, 'coef_'):
+                #imps[str(est)] = est.coef_[0] # need to scale this?
+                continue
+            else:
+                print("no importance or coef found")
+                continue
+
+        return np.mean(list(imps.values()), axis=0)
+
+
+
+    def check_feature_importance(self):
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+        fig.suptitle(f"Feature Importances", fontsize=14, y=.95)
+
+        # check feature importances
+        importances = self._get_importances()
+        (pd.DataFrame(importances, index=self.transformed_feats, columns=['Importances'])
+         .sort_values('Importances')
+         .plot(kind='barh', ax=ax1))
+        ax1.set_title("Model Feature Importance")
+
+        # permutation importance
+        perm_importance_result_train = permutation_importance(self.clf, self.X_train, self.y_train, random_state=42)
+        feat_name = self.X_train.columns
+
+        indices = perm_importance_result_train['importances_mean'].argsort()
+        ax2.barh(range(len(indices)),
+                 perm_importance_result_train['importances_mean'][indices],
+                 xerr=perm_importance_result_train['importances_std'][indices])
+        ax2.set_yticks(range(len(indices)))
+        ax2.set_title("Permutation importance")
+
+        tmp = np.array(feat_name)
+        _ = ax2.set_yticklabels(tmp[indices])
+        plt.show()
 
 
 class EDAHelper:
@@ -81,6 +332,7 @@ class EDAHelper:
 
             # distribution (not-normalized)
             self. numerical_dist(col, title=f"{col.capitalize()} Not Normalized", normalize=False, ax=ax2)
+            #self.plot_scatter(col, title="", ax=ax2)
 
             # distribution (log transform)
             self.numerical_dist(col, title=f"{col.capitalize()} Log Transformed", log=True, normalize=False, ax=ax3)
@@ -93,6 +345,22 @@ class EDAHelper:
         self.mutual_information_plot() # need to re-convert this into a category...
         # feature importance
         return self.corr_matrix()
+
+    # def plot_scatter(self, col, ax=None, title=None):
+    #     sns.scatterplot(
+    #         data=self.data,
+    #         x=var_1,
+    #         y=var_2,
+    #         hue="y",
+    #         ax=ax2,
+    #         palette=target_color,
+    #         legend=False,
+    #         alpha=0.6,
+    #     )
+    #     ax2.yaxis.set_major_formatter(ticker.EngFormatter())
+    #     ax2.set_title(str.title(var_2) + " distributions", fontsize=12)
+    #     ax2.set_ylabel(str.title(var_2), fontsize=10)
+    #     ax2.set_xlabel(str.title(var_1), fontsize=10)
 
     def percent_stacked_plot_overall(self):
         # create a figure
